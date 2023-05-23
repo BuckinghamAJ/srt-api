@@ -45,3 +45,7 @@ srt*.sql.gz
 srt*.sql
 deploy-log*
 
+winston.log.json
+# Ignore persistent storage for postgres database
+/data
+docker/db/scripts/init.sql
