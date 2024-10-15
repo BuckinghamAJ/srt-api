@@ -273,6 +273,67 @@ module.exports = {
   app.get('/api/reports/predictionMetrics', token(), admin_only(), adminReportRoutes.predictionReport)
   app.get('/api/reports/noticeTypeChangeReport', token(), admin_only(), adminReportRoutes.noticeTypeChangeReport)
 
+  const multer = require('multer');
+  const { spawn } = require('child_process');
+
+  // Set up multer for file uploads
+  const upload = multer({ dest: 'uploads/' });
+
+  let pyProg; // Reference to the child process
+
+
+  app.post('/api/predict', upload.array('files'), (req, res) => {
+      
+      if (!req.files) {
+          return res.status(400).send('No files were uploaded.');
+      }
+
+      // Create a mapping of file paths to original file names
+      const fileMap = {};
+      req.files.forEach(file => {
+          fileMap[file.path] = file.originalname;
+      });
+
+      console.log(fileMap);
+      // Collect the file paths
+      const filePaths = req.files.map(file => file.path);
+
+      // Spawn the Python process
+      pyProg = spawn('srt_ml_predict', ['-f', ...filePaths]);
+
+      let data = '';
+      pyProg.stdout.on('data', (chunk) => {
+          data += chunk.toString();
+      });
+
+      pyProg.stderr.on('data', (chunk) => {
+          console.error(`stderr: ${chunk}`);
+      });
+
+      pyProg.on('close', (code) => {
+        if (code !== 0) {
+            return res.status(500).send(`Python script exited with code ${code}`);
+        }
+        try {
+            const jsonResponse = JSON.parse(data);
+            // Convert the response keys back to the original file names
+            const convertedResponse = {};
+            console.log(jsonResponse);
+            for (const [key, value] of Object.entries(jsonResponse)) {
+                const originalName = fileMap['uploads/'+key];
+                if (originalName) {
+                    convertedResponse[originalName] = value;
+                }
+            }
+            res.json(convertedResponse);
+        } catch (e) {
+            res.status(500).send('Invalid JSON response from Python script');
+        }
+    });
+
+  });
+
+
   app.use(expressWinston.errorLogger({
     transports: transports,
     format: winston.format.combine(
@@ -308,6 +369,17 @@ module.exports = {
   }))
 
   setupCronJobs()
+
+  // Handle SIGINT and SIGTERM signals to clean up the child process
+  const cleanup = () => {
+    if (pyProg) {
+        pyProg.kill('SIGINT');
+    }
+    process.exit();
+  };
+
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
 
   return app
 },
